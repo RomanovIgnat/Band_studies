@@ -1,0 +1,9 @@
+band_env/
+hBN_spin_500/
+VASP/
+POSCARs/
+csv_cif/
+other/
+experiments
+processed
+defcts_generation/

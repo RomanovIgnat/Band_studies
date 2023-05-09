@@ -7,3 +7,4 @@ other/
 experiments
 processed
 defcts_generation/
+wandb/

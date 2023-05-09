@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from layers import MegnetModule, ShiftedSoftplus, RNNHead
+from layers import MegnetModule, ShiftedSoftplus, AttentionLayer
 from torch_geometric.nn.aggr import Set2Set
+from rnn_head import RNNHeadAutoregressive
 
 ATOMIC_NUMBERS = 95
 
@@ -58,10 +59,15 @@ class MEGNet(nn.Module):
         self.se = Set2Set(embedding_size, 1)
         self.sv = Set2Set(embedding_size, 1)
 
-        self.rnn_head = RNNHead(seq_len, 5 * embedding_size)
+        self.preproc = nn.Linear(5 * embedding_size, 2 * embedding_size)
+        self.rnn_head = RNNHeadAutoregressive(seq_len, 2 * embedding_size)
+
+        self.attn = AttentionLayer(4 * embedding_size)
 
         self.hiddens = nn.Sequential(
-            nn.Linear(5 * embedding_size + 1, embedding_size),
+            nn.Linear(4 * embedding_size, 2 * embedding_size),
+            ShiftedSoftplus(),
+            nn.Linear(2 * embedding_size, embedding_size),
             ShiftedSoftplus(),
             nn.Linear(embedding_size, 1),
         )
@@ -82,12 +88,20 @@ class MEGNet(nn.Module):
         edge_attr = F.pad(edge_attr, (0, 0, 0, tmp_shape), value=0.0)
 
         tmp = torch.cat((x, edge_attr, state), 1)
-        fermi = self.hiddens(torch.cat([tmp, torch.zeros((tmp.shape[0], 1))], dim=1))
+        tmp = self.preproc(tmp)
+        fermi = self.hiddens(torch.cat([tmp, torch.zeros_like(tmp)], dim=1))
 
         x_up_spin_up, x_up_spin_down, x_down_spin_up, x_down_spin_down = self.rnn_head(tmp)
 
+        spin_up = torch.cat((x_down_spin_up.flip((1,)), x_up_spin_up), dim=1)
+        spin_down = torch.cat((x_down_spin_down.flip((1,)), x_up_spin_down), dim=1)
+        spin_up, spin_down = self.attn(spin_up, spin_down)
+
+        x_down_spin_up, x_up_spin_up = torch.split(spin_up, 10, dim=1)
+        x_down_spin_down, x_up_spin_down = torch.split(spin_down, 10, dim=1)
+
         x_up_spin_up = self.hiddens(x_up_spin_up).squeeze()
         x_up_spin_down = self.hiddens(x_up_spin_down).squeeze()
-        x_down_spin_up = self.hiddens(x_down_spin_up).squeeze()
-        x_down_spin_down = self.hiddens(x_down_spin_down).squeeze()
+        x_down_spin_up = self.hiddens(x_down_spin_up.flip((1,))).squeeze()
+        x_down_spin_down = self.hiddens(x_down_spin_down.flip((1,))).squeeze()
         return x_up_spin_up, x_up_spin_down, x_down_spin_up, x_down_spin_down, fermi

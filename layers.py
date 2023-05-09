@@ -147,32 +147,34 @@ class MegnetModule(MessagePassing):
         return self.phi_e(torch.cat((x_i, x_j, edge_attr, state[bond_batch, :]), 1))
 
 
-class RNNHead(nn.Module):
-    def __init__(self, seq_len, emb_size):
+class AttentionLayer(nn.Module):
+    def __init__(self, emb_size):
         super().__init__()
-        self.lstm_up = nn.LSTM(input_size=emb_size + 1, hidden_size=emb_size + 1)
-        self.lstm_down = nn.LSTM(input_size=emb_size + 1, hidden_size=emb_size + 1)
-        self.seq_len = seq_len
-        self.emb_size = emb_size
+        self.self_attention_spin_up = nn.MultiheadAttention(emb_size, 2, batch_first=True)
+        self.self_attention_spin_down = nn.MultiheadAttention(emb_size, 2, batch_first=True)
+        self.cross_attention_from_down_to_up = nn.MultiheadAttention(emb_size, 2, batch_first=True)
+        self.cross_attention_from_up_to_down = nn.MultiheadAttention(emb_size, 2, batch_first=True)
 
-    def forward(self, x):
-        x_spin_up = torch.cat([x, torch.ones((x.shape[0], 1))], dim=1)
-        x_spin_down = torch.cat([x, -torch.ones((x.shape[0], 1))], dim=1)
+        self.bn_up1 = nn.BatchNorm1d(emb_size)
+        self.bn_up2 = nn.BatchNorm1d(emb_size)
+        self.bn_down1 = nn.BatchNorm1d(emb_size)
+        self.bn_down2 = nn.BatchNorm1d(emb_size)
 
-        x_up_spin_up = self.process_sequence(x_spin_up, True)
-        x_up_spin_down = self.process_sequence(x_spin_down, True)
-        x_down_spin_up = self.process_sequence(x_spin_up, False)
-        x_down_spin_down = self.process_sequence(x_spin_down, False)
+    def forward(self, spin_up, spin_down):
+        # batch * seq_len * emb_size
+        residual_up, residual_down = spin_up, spin_down
+        spin_up, _ = self.self_attention_spin_up(spin_up, spin_up, spin_up)
+        spin_down, _ = self.self_attention_spin_down(spin_down, spin_down, spin_down)
 
-        return x_up_spin_up, x_up_spin_down, x_down_spin_up, x_down_spin_down
+        spin_up = self.bn_up1(spin_up.permute(0, 2, 1)).permute(0, 2, 1) + residual_up
+        spin_down = self.bn_down1(spin_down.permute(0, 2, 1)).permute(0, 2, 1) + residual_down
 
-    def process_sequence(self, x, up):
-        res = []
-        cur = x
-        cur_h = torch.zeros((1, self.emb_size + 1))
-        cur_c = torch.zeros((1, self.emb_size + 1))
-        m = self.lstm_up if up else self.lstm_down
-        for i in range(self.seq_len):
-            cur, (cur_h, cur_c) = m(cur, (cur_h, cur_c))
-            res.append(cur)
-        return torch.stack(res, dim=2).permute(0, 2, 1)
+        residual_up, residual_down = spin_up, spin_down
+        spin_up_clone, spin_down_clone = spin_up.clone(), spin_down.clone()
+        spin_up, _ = self.cross_attention_from_down_to_up(spin_up, spin_down_clone, spin_down_clone)
+        spin_down, _ = self.cross_attention_from_up_to_down(spin_down, spin_up_clone, spin_up_clone)
+
+        spin_up = self.bn_up2(spin_up.permute(0, 2, 1)).permute(0, 2, 1) + residual_up
+        spin_down = self.bn_down2(spin_down.permute(0, 2, 1)).permute(0, 2, 1) + residual_down
+
+        return spin_up, spin_down

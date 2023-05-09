@@ -3,13 +3,13 @@ from bisect import bisect_left
 
 import torch
 
-folds = pd.read_csv('experiments/hBN_test_exp_test/folds.csv.gz', index_col="_id")
+folds = pd.read_csv('experiments/InSe_test_exp_test/folds.csv.gz', index_col="_id")
 folds = folds.loc[:, 'fold']
 
-targets = pd.read_csv('processed/hBN_spin_500/targets.csv.gz').set_index('_id')
+targets = pd.read_csv('processed/InSe_spin_500/targets.csv.gz').set_index('_id')
 targets = targets[['spin_up_seq', 'spin_down_seq', 'fermi_level']]
 
-data = pd.read_pickle('processed/hBN_spin_500/data.pickle.gz')['defect_representation']
+data = pd.read_pickle('processed/InSe_spin_500/data.pickle.gz')['defect_representation']
 
 
 def process_energy_levels(edata):
@@ -18,13 +18,15 @@ def process_energy_levels(edata):
         efermi = row[2]
         spin_up_seq = eval(row[0])
         spin_down_seq = eval(row[1])
-        i = bisect_left(spin_up_seq, efermi)
-        j = bisect_left(spin_down_seq, efermi)
-        res.append([torch.Tensor(list(reversed(spin_up_seq[i - 5: i])))[None, :],
-                    torch.Tensor(spin_down_seq[i: i + 5])[None, :],
-                    torch.Tensor(list(reversed(spin_down_seq[j - 5: j])))[None, :],
-                    torch.Tensor(spin_down_seq[j: j + 5])[None, :],
-                    torch.Tensor([efermi])[None, :]])
+        spin_up_seq = [level - efermi for level in spin_up_seq]
+        spin_down_seq = [level - efermi for level in spin_down_seq]
+        i = bisect_left(spin_up_seq, 0)
+        j = bisect_left(spin_down_seq, 0)
+        res.append([torch.tensor(list(reversed(spin_up_seq[i - 10: i])))[None, :],
+                    torch.tensor(spin_down_seq[i: i + 10])[None, :],
+                    torch.tensor(list(reversed(spin_down_seq[j - 10: j])))[None, :],
+                    torch.tensor(spin_down_seq[j: j + 10])[None, :]
+                    ])
     return res
 
 
@@ -52,9 +54,10 @@ train_data = [set_attr(s, y, ['spin_up_down',
                               'spin_up_up',
                               'spin_down_down',
                               'spin_down_up',
-                              'fermi_level']) for s, y in zip(train, train_targets)]
+                              ]) for s, y in zip(train, train_targets)]
+
 test_data = [set_attr(s, y, ['spin_up_down',
                              'spin_up_up',
                              'spin_down_down',
                              'spin_down_up',
-                             'fermi_level']) for s, y in zip(test, test_targets)]
+                             ]) for s, y in zip(test, test_targets)]
